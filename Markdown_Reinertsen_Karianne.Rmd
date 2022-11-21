@@ -1,0 +1,500 @@
+---
+title: "Final Project: Predicting Pass or Fail Grades"
+author: Karianne Reinertsen
+date: 20/11/2022
+output: 
+  pdf_document: 
+    keep_tex: yes
+fontsize: 12pt
+---
+\clearpage
+
+\section{Introduction}
+
+
+In 2021, almost 1 in 10 Portuguese schools had a failing average in the national exams. This was an increase from 2020, and shows that currently, a relatively high number of students fail their exams in Portugal  \footnote^[source: https://www.portugal.com/news/1-in-10-portuguese-schools-fail-exams/#:~:text=Almost%201%20in%2010%20Portuguese,grades%20in%20comparison%20to%202020.]. In relation to these trends, I have chosen to create models that make predictions about the final grades of a student. If students who are likely to fail a class can be identified early in the school year, it is possible to prevent said outcome.\
+
+In this project, my goal is to first identify the variables most related with failing a class, and then to apply different methods discussed in the foundations of data science course to find the model that best classifies and predicts passing and failing students. The aim is therefore focused on predicting negative outcomes, rather than predicting how well students do. With a model that can predict whether students pass or fail one or two of their classes, it is possible to identify these students after the first term, to provide extra support to those adolescents, and hopefully prevent a student from failing a class.\
+```{r include = FALSE}
+knitr::opts_chunk$set(fig.height = 3.5, fig.width = 3.5)
+```
+
+```{r include=FALSE} 
+library(devtools)
+library(reprtree)
+library(caTools)
+library(randomForest)
+library(foreign)
+library(tidyverse)
+library(readxl)
+library(margins)
+library(VIM)
+library(mice)
+library(PerformanceAnalytics)
+library(naniar)
+library(GGally)
+library(MASS)
+library(car)
+library(skedastic)
+library(lmtest)
+library(lares)
+library(ggplot2)
+library(GGally)
+library(caret) 
+library(sandwich)
+library(sjPlot)
+library(sjmisc)
+library(sjlabelled)
+library(pROC)
+library(repr)
+library(plyr)
+library(dplyr)
+library(glmnet)
+library(corrplot)
+library(knitr)
+library(lares)
+```
+
+```{r,echo=FALSE}
+rm(list=ls())
+options(repr.plot.width=16, repr.plot.height=8)
+d1 <- read.csv("https://query.data.world/s/nzqfojybv37vepvo43uwkqbuneyl27", sep=",",header=TRUE)
+d2 <- read.csv("https://query.data.world/s/lyvebpj3b5udytvusulfgngrayiisj", sep=",",header=TRUE)
+d3=merge(d1,d2,by=c("age","internet", "absences", "goout", "studytime", "Pstatus"))
+
+```
+
+```{r,echo=FALSE,fig.align='center', fig.height = 4, fig.width = 6}
+  f1  <- ggplot(d3, aes(x=G3.x, y=G3.y)) + labs(title = "Grade Distributions") + geom_point()
+  f1$labels$x  <- 'Math'
+  f1$labels$y  <- 'Portuguese'
+  f1
+```
+```{r,echo=FALSE,fig.align='center', fig.height = 4, fig.width = 6}
+d4 <- table(d3$goout, d3$age)
+barplot(d4, main="Goout and Age",
+        xlab="Age", ylab="Observations", col=c("darkblue","red", "firebrick", "white", "grey"),
+        legend = rownames(d4), args.legend=list(title="Goout"))
+`````
+```{r,echo=FALSE,fig.align='center', fig.height = 4.5, fig.width = 6}
+d5 <- table(d3$internet, d3$studytime)
+barplot(d5, main="Internet and Studytime",
+        xlab="Studytime", col=c("magenta","cyan"), ylab="Observations",
+        legend = rownames(d5), args.legend=list(title="Internet"))
+`````
+
+\section{Data}
+
+For the purpose of this project, the data I used was obtained from two surveys conducted by “Datasociety” in 2016 \footnote^[source:https://data.world/data-society/student-alcohol-consumption]. These surveys focused on students’ math and Portuguese language courses from the respective secondary schools; Gabriel Pereira and Mousinho da Silveira. These two datasets (d1 & d2) were merged together (on the variables; *Age, Internet, Absences, Goout, Studytime and Pstatus*) to be able to create a stronger model.\
+
+I generated an illustration of the overall structure of the "d3" dataset, to get an overview of the variables, missing values and rows.\
+```{r,echo=FALSE,fig.align='center', message=FALSE, fig.height = 5, fig.width = 5}
+Sys.unsetenv("LARES_FONT") 
+df_str(d3, return = "plot")
+```
+As seen in the box plot below, there are differences in how spread the data is. I chose four of the variables to demonstrate this: Absences, Math Grades, Portuguese Grades and Goout. \
+<br>
+```{r,echo=FALSE,fig.align='center', fig.height = 4, fig.width = 5}
+boxplot(d3$absences,d3$G3.x,d3$G3.y, d3$goout,col=rgb(0,0,0,1/4),
+        names=c('Absences','Math','Portuguese', 'Goout'), main= "Boxplot: Absences, Math, Portuguese and Goout") 
+```
+<br>
+A seen in the scatter plot below, the grade distribution from the introduction is now factored (by color) into students who pass both classes, and students who fail one or two classes.  :\
+```{r,echo=FALSE}
+#In order to show the scatterplot this early in the PDF, I needed to do this processing before the main data processing section. In the original script, this was done along with the rest of the data processing.
+d3$failx <- as.numeric(d3$G3.x < 7)
+d3$failx <- as.factor(d3$failx)
+d3$failx <- as.numeric(d3$failx)
+d3$faily <- as.numeric(d3$G3.y < 7)
+d3$faily <- as.factor(d3$faily)
+d3$faily <- as.numeric(d3$faily)
+d3$fail <- rowMeans(d3[ , c("faily","failx")], na.rm=TRUE)
+d3$fail <- as.factor(d3$fail > 1)
+d3$fail = ifelse(d3$fail=="TRUE",1,0)
+d3$g1 <- rowMeans(d3[ , c("G1.x","G1.y")], na.rm=TRUE)
+```
+
+```{r,echo=FALSE,fig.align='center'}
+f1  <- ggplot(d3, aes(x=G3.x, y=G3.y)) + labs(title = "Grade Distributions and Fail") + geom_point(aes(col = as.factor(fail)))
+f1$labels$x  <- 'Math'
+f1$labels$y  <- 'Portuguese'
+f1$labels$colour  <- 'Fail'
+f1
+```
+<br>
+
+<br>
+Before I started processing the data, I ran a correlation analysis to check which of the variables were correlated with failing (*fail*).\
+```{r,echo=FALSE,fig.align='center'}
+Sys.unsetenv("LARES_FONT") 
+corr_var(d3, 
+         fail, 
+         max_pvalue = 0.10
+         ,top = 20) 
+```
+
+\subsection{Cleaning and preparation}
+I ran two tests to check for missing values in the merged dataframe (*sum* and the dataset structure) .
+After running the test, I saw that there were no missing values, and therefore no need for any NA replacement\
+```{r include=FALSE} 
+sum(is.na(d3))
+````
+\subsection{Feature Engineering}
+\subsection{The dependent variable:}
+<br>
+As my original merged data frame (d3) had 67 variables, I needed to both process and choose variables from the data before I started creating models. Because I was interested in predicting whether they pass or fail in any classes, I needed to transform their end of term grades (G3.x & G3.y) into one dummy variable. Their G3.x and G3.y scores represent their final grades in x(math) and y(portuguese), on a scale from 0-20. A passing grade in Portugal is a 7 \footnote^[source:https://www.portugaleducation.info/education-system/grading-system-academic-year-and-language-of-instruction.html], therefore I transformed these two columns into one dummy variable that gave a 0 if no classes were failed, and 1 if either or both of the classes were failed.\
+
+\subsection{Independent variables:}
+<br>
+First:\
+I created a new column with the average of the sum of the grades of the students first term of G1.x and G1.y.
+
+Age:\
+The students were between 15 and 20 years old, so I factored the ages to go from 0(15) to 4(19-20). I chose to only assign one value to 19-20 because there was only 1 person at the age of 20 in my dataset. 
+
+Internet:\
+After performing count(d3$internet), I found that only 41 out of 536 students do not have internet. Therefore, I assigned the value 1 to them, and 0 to the ones that do have internet.
+
+Goout:\
+I decided to keep the variable "goout" as a numeric variable.
+
+Paid:\
+This variable was a binary (yes or no) variable, that I chose to factor so that students who paid for extra classes got a value of 1 and students did not got a value of 0.
+
+High:\
+The high variable represented whether the student wanted to pursue higher education (binary: yes or no) or not. I processed and merged the columns before I made a new variable with the factors "yes" (1) and "no" (0). If a student answered "yes" both times, they got a 1, and if they said "no" once or twice, they got a 0.
+
+Failures:\
+Failures was a numeric variable (n if 1<=n<3, else 4) , and then I calculated the mean of the number of past class failures (from math (faiures.x) and Portuguese(failures.y)).
+
+Pstatus:\
+Pstatus gave an A if the parents were apart, and a T if they were together. I factored them to give A = 1, T = 0.
+
+<br>
+In the end, I created an empty dataframe with 536 rows and 0 columns, so that I could move the variables I wanted to use (*gout, fail, internet, age, pstatus, studytime, absences, first, paid, medu, high, failures*) into the new dataframe.\
+
+```{r,echo=FALSE}
+ELSE <- TRUE
+start.time <- Sys.time()
+d3 <- d3 %>% mutate(.,result = with(.,case_when(
+  (age == 15) ~ 0,
+  (age == 16) ~ 1,
+  (age == 17) ~ 2,
+  (age == 18) ~ 3,
+  ELSE ~ 4
+)))
+
+d3$age <- d3$result
+d3$age <- as.factor(d3$age)
+d3$internet = ifelse(d3$internet=="no",1,0)
+d3$internet <- as.factor(d3$internet)
+d3$goout <- as.numeric(d3$goout)
+d3$paid.x = ifelse(d3$paid.x=="yes",1,0)
+d3$paid.x <- as.factor(d3$paid.x)
+d3$high1 <- d3$higher.x
+d3$high1 = ifelse(d3$high1=="yes",1,0)
+d3$high2 <- d3$higher.y
+d3$high2 = ifelse(d3$high2=="yes",1,0)
+d3$high <- rowMeans(d3[ , c("high1","high2")], na.rm=TRUE)
+d3$high <- as.factor(d3$high > .99)
+d3$high = ifelse(d3$high=="TRUE",1,0)
+d3$failures <- rowMeans(d3[ , c("failures.y","failures.x")], na.rm=TRUE)
+d3$Pstatus = ifelse(d3$Pstatus=="A",1,0)
+data = data.frame(matrix(nrow = 536, ncol = 0))
+data$goout <- d3$goout
+data$fail <- (d3$fail)
+data$internet <- d3$internet
+data$age <- d3$age
+data$pstatus <- as.numeric(d3$Pstatus)
+data$studytime <- d3$studytime
+data$absences <- d3$absences
+data$first <- d3$g1
+data$paid <- d3$paid.x
+data$medu <- d3$Medu.x
+data$high <- as.numeric(d3$high)
+data$failures <- d3$failures
+dataa <- data
+```
+<br>
+I checked the correlations in my final dataframe (with a max p of 0.10) to make sure all my variables were relevant, and that the dataframe was ready to be used in the models.\
+```{r,echo=FALSE,fig.align='center'}
+Sys.unsetenv("LARES_FONT") 
+corr_var(dataa, 
+         fail, 
+         max_pvalue = 0.10
+         ,top = 15) 
+````
+
+<br>
+
+\section{Methodology and Results}
+
+Because this was a classification task, I used models that achieved classification, and then compared the Binomial regression model to LASSO and Random Forest.
+
+\subsection{Binomial Model:}
+
+
+The first step was to create the model using the glm function with the binomial(logit) family.\
+```{r include=FALSE} 
+logit  <- glm(fail ~ . , data = data , family = binomial(logit))
+summary(logit)
+```
+
+```{r include=FALSE} 
+fitted_values <- predict(logit,type='response')
+head(fitted_values)
+data$fitted_values = fitted_values
+data$y_hat <- data$fitted_values>0.5
+cm  <- data.frame(table('True'=data$fail,'Predicted'=as.double(data$y_hat)))
+`````
+<br>
+Then, I made predictions from the model, and created a variable (y_hat) in the original dataframe (data)
+I then compared the predictions to the original outcomes. This plot shows the frequency of the True and False predictions for failing and non failing students..\
+```{r, echo=FALSE,fig.align='center'}
+ggplot(data = cm, mapping = aes(x = ordered(True,c(1,0)), y = Predicted, fill=Freq)) +  geom_tile() +
+  geom_text(aes(label=(Freq)),col='white') + xlab('True') + labs(title = "Frequency of True and False Predictions:Binomial Model")
+````
+
+```{r include=FALSE} 
+data$y_hatnew  <- as.double(fitted_values > 0.66)
+cm  <- data.frame(table('True'=data$fail,'Predicted'=as.double(data$y_hatnew)))
+cm  <- cm %>% group_by(True) %>% mutate(Realized_pct = Freq/sum(Freq))
+`````
+<br>
+Unfortunately, as seen in this illustration of relative frequencies, this Binomial model does a much better job at predicting students who pass, than students who fail. These frequencies show that 7% percent of are wrongly predicted to pass their classes. This is 37% percent of all students who fail. \
+```{r, echo=FALSE,fig.align='center'}
+ggplot(data = cm, mapping = aes(x = ordered(True,c(1,0)), y = Predicted, fill=Realized_pct)) +  geom_tile() +
+  geom_text(aes(label=round(Realized_pct,2)),col='white') + xlab('True') + labs(title = "Relative Frequency of True and False Predictions:Binomial Model")
+````
+<br>
+
+```{r include=FALSE} 
+roc <- roc(data$fail, data$fitted_values)
+auc <- round(auc(data$fail, data$fitted_values),4)
+(1 - mean(data$fail != (data$fitted_values>0.5))) * 100
+`````
+<br>
+This is another illustration of how accurate the model is, with an AUC displayed at the top. \
+```{r, echo=FALSE,fig.align='center', fig.height = 3.5, fig.width = 5.5}
+ggroc(roc, color = 'darkblue', size = 1, legacy.axes = TRUE) +
+  ggtitle(paste0('ROC Curve ', '(AUC = ', auc, ')')) + ylab('True Positive Rate') + xlab('False Positive Rate') + 
+  geom_point(aes(x=0,y=1,color='Perfect predictor')) + 
+  geom_abline(aes(slope=1,intercept=0,color='Random guess'))
+````
+
+```{r,echo=FALSE}
+MSE <- c()
+fitted_values <- as.character(fitted_values)
+fitted_values <- as.numeric(fitted_values)
+data$fail1 <- as.character(data$fail)
+data$fail1 <- as.numeric(data$fail1)
+MSE['Binomial']  <- mean(((data$fail1)-fitted_values)^2)
+`````
+<br>
+
+I created an MSE vector to hold the MSE values from the three models, starting with the MSE of the binomial model
+
+```{r, echo=FALSE, results = 'asis'}
+#print(MSE[c("Binomial")])
+kable(MSE[c("Binomial")], col.names = c("MSE"))
+````
+<br>
+```{r,echo=FALSE}
+data = subset(data, select = -c(y_hat, y_hatnew, fitted_values, fail1) )
+`````
+
+Before doing any further analysis, I needed to clean the data again, and remove the columns for y_hat, y_hatnew and fitted_values:
+
+
+
+\subsection{Random Forest Model:}
+
+
+For the random forest model, I set the seed, and then I split the data into train and test datasets with a ratio of 0.8 (80% was passed in the training dataset and 20% in the testing dataset).
+The train dataset got all the data points after split which were 'TRUE', and similarly the test dataset got all the data points which were 'FALSE'.
+The tuned RF returned the best optimized value of the random varaible, which was 3. This corresponded to a OOB of 0% (OOB - prediction error)
+
+
+Then, I created the model. 
+
+\clearpage
+```{r include=FALSE} 
+set.seed(1234)
+split <- sample.split(data, SplitRatio = 0.8) 
+split 
+data_train <- subset(data, split == "TRUE") 
+data_test <- subset(data, split == "FALSE") 
+dim(data_train) 
+dim(data_test)  
+data$fail <- as.factor(data$fail)    
+data_train$fail <- as.factor(data_train$fail)
+bestmtry <- tuneRF(data_train,data_train$fail,stepFactor = 1.2, improve = 0.01, trace=T, plot= T)
+set.seed(1234)
+model <- randomForest(fail~.,data= data_train)
+model
+`````
+
+
+```{r include=FALSE}
+importance(model)  
+````
+<br>
+This is visualization of the MeanDecreaseGini´s, which is usesful to look at the coefficients in the model\
+```{r, echo=FALSE,fig.align='center', fig.height = 4.5, fig.width = 4.5}
+varImpPlot(model)
+````
+
+<br>
+I used the model to predict values, and to check the accuracy with the test data.
+The confusion matrix shows a picture of the test data with features such as the accuracy and the Neg Pred Value. \
+\clearpage
+```{r include=FALSE} 
+pred_test <- predict(model, newdata = data_test, type= "class")
+pred_test
+`````
+```{r, echo=FALSE,fig.align='center',, results = 'asis', fig.height = 5.5, fig.width = 3.5}
+confusionMatrix(table(pred_test,data_test$fail)) 
+````
+<br>
+
+<br>
+Furthermore, I made an illustration of my random forest tree. Because there were 500 trees in this model, the full plot was shrinked and scarcely legible. I added a tree with the depth of 4, to illustrate how the model works. \
+````{r, echo=FALSE,fig.align='center',results='hide', fig.height = 5, fig.width = 5}
+reprtree:::plot.reprtree( ReprTree(model, data_test, metric='d2'),depth=4)
+````
+
+
+```{r,echo=FALSE}
+pred_test <- as.character(predict(model, newdata = data_test, type= "class"))
+pred_test <- as.numeric(pred_test)
+data_test$fail1 <- as.character(data_test$fail)
+data_test$fail1 <- as.numeric(data_test$fail1)
+
+MSE['RandomForest']  <- mean(((data_test$fail1)-pred_test)^2)
+`````
+<br>
+I also calculated and added the MSE of random forest to the MSE vector. 
+
+```{r, echo=FALSE, results = 'asis'}
+#print(MSE[c("Binomial", "RandomForest")])
+kable(MSE[c("Binomial", "RandomForest")], col.names = c("MSE"))
+````
+<br>
+
+\subsection{Lasso Model:}
+
+
+I set the seed, I trained the data by splitting it into 0.7 and 0.3. I also processed the data so that it would work with the Glmnet function.
+
+First, I ran the model to find out what the best lambda value was for my model. I also created a visualization of the Mean Squared Error and Log(lambda).\
+
+```{r include=FALSE} 
+set.seed(1234)
+split1 <- sample.split(data, SplitRatio = 0.7) 
+split1 
+data_train1 <- subset(data, split1 == "TRUE") 
+data_test1 <- subset(data, split1 == "FALSE") 
+dim(data_train1) 
+head(data_train1)
+dim(data_test1)  
+y <- data_train1$fail
+y <- as.character(y)
+y <- as.numeric(y)
+x <- data.matrix(data_train1)
+x <- x[, colnames(x) != "fail"]
+new <- data.matrix(data_test1)
+y_test <- data_test1$fail
+y_test <- as.character(y_test)
+y_test <- as.numeric(y_test)
+new <- new[, colnames(new) != "fail"]
+cv_model <- cv.glmnet(x, y, alpha = 1, family="binomial")
+best_lambda <- cv_model$lambda.min
+best_lambda
+`````
+
+```{r, echo=FALSE,fig.align='center', fig.height = 5, fig.width = 5}
+plot(cv_model) 
+````
+
+```{r,echo=FALSE}
+set.seed(1234)
+best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda, family="binomial")
+coef <- coef(best_model)
+`````
+<br>
+I ran the model with the best lambda value. I printed the coefficients to be able to see shrinkage of the variables.\
+
+```{r, echo = FALSE, comment=NA}
+print(coef)
+````
+<br>
+
+```{r,echo=FALSE}
+lassopred <- predict(best_model, s = best_lambda, newx = new)
+lassopred[lassopred>=0.5]  <- 1
+lassopred[lassopred<0.5] <- 0
+mat  <- as.matrix(data)
+confusion_matrix  <- ftable(y_test, lassopred)
+accuracy <- 100* (sum(diag(confusion_matrix)) / length(lassopred))
+````
+
+I also calculated the accuracy of the Lasso model:
+```{r, echo = FALSE, comment=NA}
+kable(accuracy, col.names = c("Accuracy"))
+````
+
+```{r,echo=FALSE}
+MSE['Lasso']  <- mean((y_test-lassopred)^2)
+`````
+<br>
+
+
+
+Lastly, I computed the MSE to compare the MSE´s of all the models I created.\
+
+```{r, echo=FALSE, results = 'asis'}
+#print(MSE)
+kable(MSE, col.names = c("MSE"))
+````
+<br>
+
+
+
+\section{Conclusions from this analysis:}
+
+I found that the best model to predict whether a student will fail one of these exams is the Random Forest model. It gives the superior accuracy level of 96,24% and the best accuracy interval (95% CI : (0.9144, 0.9877)). The P value is low (significant), with a value of 6.41e-07. It also has good prediction values, both  the positive and the negative.
+
+I also found that the Random Forest model has the lowest MSE, and that the Lasso has the highest MSE. The Lasso does not seem to fit as well with my dataset as the two others. The model gave a lower accuracy rate in its predictions in comparison to the Random Forest and Binomial model. I chose the Random Forest both because it has the lower MSE, and because it giver a much better prediction rate for the students who fail than the other models. 
+
+The feature that seems to be most relevant is first, which is the first term grade. When choosing whether or not to include this variable in my model, I considered a couple of problems. 
+1) The variable is highly indicative of the final grades, and although the model works fairly well without it, the prediction values are more accurate with the variable in the model.
+2) Creating a model that predicts failing grades solely based on variables that reflect the background of the students (and not the current status), might be controversial. If the predictions are not related to current performance, it will highlight the importance of variables such as pstatus (Together or Apart). Therefore I believe it is better to wait until the first grades come out to make predictions. The model will be stronger, and the predictions will also be based on background and current performance, instead of exclusively making predictions based on the past.
+<br>
+These issues were important to me because I want the model to be applicable to a real-life secondary school, where we must consider the controversies surrounding model application. 
+
+
+Other highly relevant features are failures (number of former failed classes), high (desire to pursue higher education) and paid (paying for extra classes). This finding is stable across all models considered in this study, with those variables being selected in the Lasso regression as well. It is not surprising that Random Forest outperform Lasso and Binomial regression in this setting, because of the high nonlinear dependence exhibited in this merged dataset.\
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
